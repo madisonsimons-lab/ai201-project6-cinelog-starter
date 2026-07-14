@@ -166,3 +166,28 @@ def test_remove_from_watchlist_not_present_raises(app, sample_user, sample_film)
     with app.app_context():
         with pytest.raises(NotOnWatchlistError):
             remove_from_watchlist(user_id=sample_user, film_id=sample_film)
+
+
+# ── Edge case: per-user scoping (chosen, not requested in review) ─────────────
+
+def test_watchlist_dedup_is_scoped_per_user(app, sample_user, sample_film):
+    """
+    Deduplication is keyed on (user_id, film_id), so the SAME film may appear on
+    two different users' watchlists. One user having the film must not block
+    another user from adding it, and each user should get their own entry.
+    """
+    with app.app_context():
+        other_user = User(username="otheruser", email="other@example.com")
+        db.session.add(other_user)
+        db.session.commit()
+        other_user_id = other_user.id
+
+        add_to_watchlist(user_id=sample_user, film_id=sample_film)
+
+        # Adding the same film for a DIFFERENT user must succeed, not raise.
+        entry = add_to_watchlist(user_id=other_user_id, film_id=sample_film)
+        assert entry.user_id == other_user_id
+
+        # Two independent entries exist for the same film — one per user.
+        total = WatchlistEntry.query.filter_by(film_id=sample_film).count()
+        assert total == 2
