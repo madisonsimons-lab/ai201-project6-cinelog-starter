@@ -191,3 +191,26 @@ def test_watchlist_dedup_is_scoped_per_user(app, sample_user, sample_film):
         # Two independent entries exist for the same film — one per user.
         total = WatchlistEntry.query.filter_by(film_id=sample_film).count()
         assert total == 2
+
+
+# ── Visibility toggle ────────────────────────────────────────────────────────
+
+def test_add_to_watchlist_public_flag(app, sample_user, sample_film):
+    """
+    Callers can set visibility explicitly via the public param; omitting it
+    keeps the model's private default.
+    """
+    with app.app_context():
+        explicit = add_to_watchlist(
+            user_id=sample_user, film_id=sample_film, public=True
+        )
+        assert explicit.public is True
+
+
+def test_add_to_watchlist_defaults_private(app, sample_user, sample_film):
+    """
+    Omitting the public param falls back to the model default (private).
+    """
+    with app.app_context():
+        entry = add_to_watchlist(user_id=sample_user, film_id=sample_film)
+        assert entry.public is False
