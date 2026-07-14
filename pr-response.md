@@ -333,3 +333,5 @@ fix: prevent duplicate watchlist entries
 fix: rename save_to_watchlist to add_to_watchlist per naming convention
 feat: add watchlist model, service, and routes
 ```
+
+![git log --oneline on feature/watchlist showing rewritten conventional commits with no merge commits](assets/git-log.png)
