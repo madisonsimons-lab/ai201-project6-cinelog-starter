@@ -81,6 +81,10 @@ class WatchlistEntry(db.Model):
     date_added = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     public = db.Column(db.Boolean, default=True)
 
+    __table_args__ = (
+        db.UniqueConstraint("user_id", "film_id", name="unique_user_film_watchlist"),
+    )
+
     film = db.relationship("Film")
 
     def to_dict(self):
