@@ -22,9 +22,11 @@ def create_app(config=None):
 
     from routes.films import films_bp
     from routes.collection import collection_bp
+    from routes.watchlist.watchlist import watchlist_bp
 
     app.register_blueprint(films_bp, url_prefix="/films")
     app.register_blueprint(collection_bp, url_prefix="/collection")
+    app.register_blueprint(watchlist_bp, url_prefix="/watchlist")
 
     with app.app_context():
         db.create_all()
