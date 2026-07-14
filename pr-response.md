@@ -174,32 +174,93 @@ a `String(36)` column without relying on SQLite's loose typing. (3)
 `git log --graph` shows my feature commits form a linear chain on top of
 `origin/main` with **no merge commits** among them.
 
+## Stretch — remove_from_watchlist()
+**What I did:** Added `remove_from_watchlist(user_id, film_id)`, following the
+`remove_from_collection()` pattern exactly: look up the `(user_id, film_id)` entry;
+if it doesn't exist raise a new `NotOnWatchlistError` (mirroring
+`NotInCollectionError`); otherwise `db.session.delete` it and return `True`. I also
+added a `DELETE /watchlist/<user_id>/remove` route that returns **200** on success
+and **404** (via `NotOnWatchlistError`) when the film isn't on the list — matching
+the collection route's remove endpoint.
+
+**Why / how verified:** The naming (`verb_to_noun`) and the "raise a typed error
+instead of silently no-op'ing" convention come straight from the collection
+service, so removal behaves the same way a reviewer would already expect. Covered
+by `test_remove_from_watchlist_deletes_entry` (add then remove, confirm the row is
+gone) and `test_remove_from_watchlist_not_present_raises` (remove when absent →
+`NotOnWatchlistError`). Also exercised the route directly: 200 then 404 on a repeat
+remove.
+
+## Stretch — additional test (my choice of edge case)
+**What I did:** Added `test_watchlist_dedup_is_scoped_per_user`. It adds the same
+film to two *different* users' watchlists and asserts both adds succeed and two
+independent entries exist.
+
+**Why I chose it:** The dedup fix (Comment 2) rests entirely on the unique key
+being `(user_id, film_id)`. The most likely way to break it in a future refactor
+is to make the constraint (or the pre-check) key on `film_id` alone — which would
+silently stop *any* two users from watchlisting the same film. None of the
+review-driven tests would catch that regression, because they all use a single
+user. This test pins the per-user scoping down as intended behavior, so the bug
+would fail a test instead of shipping.
+
+## Stretch — visibility toggle
+**What I did:** Added an optional `public` parameter to `add_to_watchlist(user_id,
+film_id, public=None)` and threaded it through the `POST /watchlist/<user_id>/add`
+body (`{ "film_id": "...", "public": true }`, `public` optional). When a caller
+passes `public`, the entry uses it; when omitted (`None`), the service leaves it
+unset so the model's `default=False` (private) applies.
+
+**Why / how verified:** This lets a caller opt a specific list into public
+visibility explicitly, without changing the safe default from Comment 4 — and,
+importantly, the default still lives in exactly one place (the model column), so
+the service doesn't hard-code a second copy of it that could drift. Covered by
+`test_add_to_watchlist_public_flag` (explicit `public=True` is honored) and
+`test_add_to_watchlist_defaults_private` (omitting it stays `False`). Verified via
+the route too: `POST` with `"public": true` returns an entry with `public: true`.
+
 ## PR Description
 
-### What this feature does
+### Overview
 Adds a **watchlist** — films a user wants to watch *later* — as a first-class list
-alongside the existing collection (films already watched). It introduces a
-`WatchlistEntry` model (UUID primary key; `user_id` and `film_id` foreign keys;
-`date_added`; `public` flag) with a unique `(user_id, film_id)` constraint, a
-`watchlist_service` with `add_to_watchlist()` / `get_watchlist()`, and two
-endpoints:
+alongside the existing collection (films already watched).
 
-- `GET /watchlist/<user_id>` — return the user's watchlist, newest-first.
-- `POST /watchlist/<user_id>/add` with body `{ "film_id": "<uuid>" }` — add a film.
-  Returns **201** with the created entry; **404** if the film doesn't exist;
-  **409** if it's already on the watchlist.
+- **Model:** `WatchlistEntry` — UUID primary key, `user_id` / `film_id` foreign
+  keys, `date_added`, a `public` visibility flag, and a unique `(user_id, film_id)`
+  constraint.
+- **Service (`watchlist_service.py`):** `add_to_watchlist()`,
+  `remove_from_watchlist()`, `get_watchlist()`.
+
+### Endpoints
+
+| Method | Route | Body | Responses |
+|--------|-------|------|-----------|
+| `GET` | `/watchlist/<user_id>` | — | `200` list, newest-first |
+| `POST` | `/watchlist/<user_id>/add` | `{ "film_id": "<uuid>", "public": true }` — `public` optional | `201` created · `404` no such film · `409` already on list |
+| `DELETE` | `/watchlist/<user_id>/remove` | `{ "film_id": "<uuid>" }` | `200` removed · `404` not on list |
 
 ### Design decisions
-1. **Default visibility — private (`public=False`).** A watchlist reveals intent
-   and taste; accidental public exposure is irreversible while opting into sharing
-   is one click, so the safe default wins. Tradeoff: this slows social discovery,
-   which we'd recover with an explicit share prompt rather than an exposed default.
-   (Full rationale: "Comment 4 — Default visibility" above.)
-2. **Sort order — date added, newest first.** A watchlist is a "saved for later"
-   queue, so recency matches the add-then-browse loop, and it's consistent with how
-   `get_collection()` already orders. Alphabetical's real strength (locating a known
-   title) belongs in explicit sort/search controls, not the default.
-   (Full rationale: "Comment 5 — Sort order" above.)
+- **Default visibility → private (`public=False`).** A watchlist reveals intent and
+  taste, and accidental public exposure is irreversible while opting in is one click
+  — so the safe default wins. The tradeoff is slower social discovery, which we'd
+  recover with an explicit share prompt rather than an exposed default. Callers can
+  still opt a specific entry public via the `public` flag. *(Full reasoning under
+  "Comment 4 — Default visibility" in this doc.)*
+- **Sort order → date added, newest-first.** A watchlist is a "saved for later"
+  queue, so recency matches the add-then-browse loop, and it's consistent with how
+  `get_collection()` already orders. Alphabetical's real strength (locating a known
+  title) belongs in explicit sort/search controls, not the default. *(Full reasoning
+  under "Comment 5 — Sort order".)*
+
+### Review feedback addressed
+Renamed `save_to_watchlist` → `add_to_watchlist` (naming convention), added
+deduplication (`AlreadyOnWatchlistError` + unique constraint, surfaced as `409`),
+added the missing nonexistent-film test, documented the two design decisions above,
+and reconciled `film_id` to UUID after the main-branch refactor.
+
+### Stretch additions
+`remove_from_watchlist()` + its `DELETE` endpoint, an optional `public` flag for
+explicit per-entry visibility, and an extra test pinning down per-user dedup scoping.
 
 ### How to manually test
 From the repo root (with the virtualenv available):
@@ -240,10 +301,18 @@ curl -isX POST localhost:5000/watchlist/$USER/add \
 curl -isX POST localhost:5000/watchlist/$USER/add \
      -H 'Content-Type: application/json' \
      -d '{"film_id":"00000000-0000-0000-0000-000000000000"}' | head -1
+
+# e) (stretch) Add with explicit public flag -> 201, "public": true
+curl -sX POST localhost:5000/watchlist/$USER/add \
+     -H 'Content-Type: application/json' -d "{\"film_id\":\"$FILM\",\"public\":true}"
+
+# f) (stretch) Remove the film -> 200; removing again -> 404
+curl -isX DELETE localhost:5000/watchlist/$USER/remove \
+     -H 'Content-Type: application/json' -d "{\"film_id\":\"$FILM\"}" | head -1
 ```
 
-Automated coverage: `.venv/bin/python -m pytest tests/ -v` → 8 passing
-(4 collection + 4 watchlist).
+Automated coverage: `.venv/bin/python -m pytest tests/ -v` → 13 passing
+(4 collection + 9 watchlist).
 
 ### Commit history
 Clean, conventional, one logical change per commit, no merge commits
@@ -251,6 +320,10 @@ Clean, conventional, one logical change per commit, no merge commits
 final amend/push — screenshot the live output):
 
 ```
+docs: document stretch features in PR response doc
+feat: support explicit public flag on add_to_watchlist
+test: add per-user watchlist scoping edge case
+feat: add remove_from_watchlist service and route
 docs: add PR response doc with visibility and sort-order decisions
 test: add watchlist service tests
 fix: migrate watchlist film_id to UUID after main branch refactor
